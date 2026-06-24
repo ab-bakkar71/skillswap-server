@@ -87,6 +87,21 @@ async function run() {
       res.send(result)
     })
 
+    // get freelancer
+    app.get('/api/freelancer', async(req, res)=>{
+      const query = {role: "freelancer"};
+      const result = await userCollection.find(query).toArray();
+      res.send(result)
+    })
+
+    // get freelancer by id
+    app.get('/api/freelancer/:id', async(req, res)=>{
+      const id = req.params.id;
+      const query = {_id: new ObjectId(id)};
+      const result = await userCollection.findOne(query);
+      res.send(result)
+    })
+
     
 
 
