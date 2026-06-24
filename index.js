@@ -1,47 +1,79 @@
 const dns = require("node:dns");
 dns.setServers(["8.8.8.8", "8.8.4.4"]);
 
-const express = require('express');
+const express = require("express");
 const app = express();
 require("dotenv").config();
 const port = process.env.PORT || 8000;
 var cors = require("cors");
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion } = require("mongodb");
 
 app.use(cors());
 app.use(express.json());
 
-
-const uri = process.env.MONGO_DB_URI
+const uri = process.env.MONGO_DB_URI;
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
 });
 async function run() {
   try {
     // await client.connect();
     const database = client.db("skill_swap");
     const taskCollection = database.collection("task");
+    const userCollection = database.collection("user");
     // post task api
-    app.post("/api/task", async(req, res)=>{
-      const task = req.body
-      const newTask ={
+    app.post("/api/task", async (req, res) => {
+      const task = req.body;
+      const newTask = {
         ...task,
-        createAt: new Date()
-      }
+        createAt: new Date(),
+      };
       const result = await taskCollection.insertOne(newTask);
       res.send(result);
-    })
+    });
 
+    // client my task api
+    app.get("/api/task/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = {
+        clientEmail: email,
+      };
+      const result = await taskCollection.find(query).toArray();
+      res.send(result);
+    });
 
+    // Edit freelancer data api
+    app.patch("/api/freelancer/update/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        const updateData = req.body;
+        const query = { email: email };
 
-
+        const updateDoc = {
+          $set: {
+            name: updateData.name,
+            image: updateData.image,
+            skills: updateData.skills,
+            bio: updateData.bio,
+            hourlyRate: updateData.hourlyRate,
+          },
+        };
+        const result = await userCollection.updateOne(query, updateDoc);
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Internal Server Error" });
+      }
+    });
     // await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    console.log(
+      "Pinged your deployment. You successfully connected to MongoDB!",
+    );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
@@ -49,8 +81,8 @@ async function run() {
 }
 run().catch(console.dir);
 
-app.get('/', (req, res) => {
-  res.send('Hello World!');
+app.get("/", (req, res) => {
+  res.send("Hello World!");
 });
 
 app.listen(port, () => {
