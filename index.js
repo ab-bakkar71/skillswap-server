@@ -26,6 +26,7 @@ async function run() {
     const database = client.db("skill_swap");
     const taskCollection = database.collection("task");
     const userCollection = database.collection("user");
+    const proposalCollection = database.collection("proposal")
     // post task api
     app.post("/api/task", async (req, res) => {
       const task = req.body;
@@ -102,9 +103,26 @@ async function run() {
       res.send(result)
     })
 
+    // Dynamic Section 1 — Latest Featured Tasks
+    app.get('/api/featured-task/open', async(req, res)=>{
+      const query = {status: 'open'}
+      const result = await taskCollection.find(query).sort({createAt: -1}).limit(4).toArray();
+      res.json(result)
+    })
+
+    // proposal data post api
+    app.post('/api/proposal', async(req, res)=>{
+      const proposal = req.body;
+      const finalProposal = {
+      ...proposal,
+      createdAt: new Date()
+    };
+
+    const result = await proposalCollection.insertOne(finalProposal);
+    res.send(result)
+    })
+
     
-
-
 
 
     // await client.db("admin").command({ ping: 1 });
