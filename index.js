@@ -26,7 +26,7 @@ async function run() {
     const database = client.db("skill_swap");
     const taskCollection = database.collection("task");
     const userCollection = database.collection("user");
-    const proposalCollection = database.collection("proposal")
+    const proposalCollection = database.collection("proposal");
     // post task api
     app.post("/api/task", async (req, res) => {
       const task = req.body;
@@ -73,57 +73,94 @@ async function run() {
     });
 
     // all task api
-    app.get('/api/tasks', async(req, res)=>{
+    app.get("/api/tasks", async (req, res) => {
       const cursor = await taskCollection.find();
       const result = await cursor.toArray();
       res.send(result);
-
-    })
+    });
 
     // get task by id
-    app.get('/api/tasks/:id', async(req, res)=>{
+    app.get("/api/tasks/:id", async (req, res) => {
       const id = req.params.id;
-      const query = {_id: new ObjectId(id)};
+      const query = { _id: new ObjectId(id) };
       const result = await taskCollection.findOne(query);
-      res.send(result)
-    })
+      res.send(result);
+    });
 
     // get freelancer
-    app.get('/api/freelancer', async(req, res)=>{
-      const query = {role: "freelancer"};
+    app.get("/api/freelancer", async (req, res) => {
+      const query = { role: "freelancer" };
       const result = await userCollection.find(query).toArray();
-      res.send(result)
-    })
+      res.send(result);
+    });
 
     // get freelancer by id
-    app.get('/api/freelancer/:id', async(req, res)=>{
+    app.get("/api/freelancer/:id", async (req, res) => {
       const id = req.params.id;
-      const query = {_id: new ObjectId(id)};
+      const query = { _id: new ObjectId(id) };
       const result = await userCollection.findOne(query);
-      res.send(result)
-    })
+      res.send(result);
+    });
 
     // Dynamic Section 1 — Latest Featured Tasks
-    app.get('/api/featured-task/open', async(req, res)=>{
-      const query = {status: 'open'}
-      const result = await taskCollection.find(query).sort({createAt: -1}).limit(4).toArray();
-      res.json(result)
-    })
+    app.get("/api/featured-task/open", async (req, res) => {
+      const query = { status: "open" };
+      const result = await taskCollection
+        .find(query)
+        .sort({ createAt: -1 })
+        .limit(4)
+        .toArray();
+      res.json(result);
+    });
 
     // proposal data post api
-    app.post('/api/proposal', async(req, res)=>{
+    app.post("/api/proposal", async (req, res) => {
       const proposal = req.body;
       const finalProposal = {
-      ...proposal,
-      createdAt: new Date()
-    };
+        ...proposal,
+        createdAt: new Date(),
+      };
 
-    const result = await proposalCollection.insertOne(finalProposal);
-    res.send(result)
-    })
+      const result = await proposalCollection.insertOne(finalProposal);
+      res.send(result);
+    });
 
-    
+    // proposal show on freelancer dashboard api
+    app.get("/api/proposal/freelancer/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = {
+        freelancerEmail: email,
+      };
+      const result = await proposalCollection
+        .find(query)
+        .sort({ createAt: -1 })
+        .toArray();
+      res.send(result);
+    });
 
+    // proposal show on client dashboard api
+    app.get("/api/proposal/client/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = {
+        clientEmail: email,
+      };
+      const result = await proposalCollection
+        .find(query)
+        .sort({ createAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    // proposal showing by task id
+    app.get("/api/proposals/task/:taskId", async (req, res) => {
+      const taskId = req.params.taskId;
+      const query = { taskId: taskId };
+      const result = await proposalCollection
+        .find(query)
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
 
     // await client.db("admin").command({ ping: 1 });
     console.log(
