@@ -162,6 +162,20 @@ async function run() {
       res.send(result);
     });
 
+    // active task
+    app.get("/api/active-task/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = {
+        freelancerEmail: email,
+        status: "accepted",
+      };
+      const result = await proposalCollection
+        .find(query)
+        .sort({ createAt: -1 })
+        .toArray();
+        res.send(result)
+    });
+
     // await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
