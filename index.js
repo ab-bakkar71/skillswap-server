@@ -27,6 +27,7 @@ async function run() {
     const taskCollection = database.collection("task");
     const userCollection = database.collection("user");
     const proposalCollection = database.collection("proposal");
+    const paymentCollection = database.collection("payment");
     // post task api
     app.post("/api/task", async (req, res) => {
       const task = req.body;
@@ -173,8 +174,141 @@ async function run() {
         .find(query)
         .sort({ createAt: -1 })
         .toArray();
-        res.send(result)
+      res.send(result);
     });
+
+    // get data statice
+    app.get("/api/admin/dashboard-summary", async (req, res) => {
+      const totalUsers = await userCollection.countDocuments();
+      const totalTasks = await taskCollection.countDocuments();
+      const activeTasks = await taskCollection.countDocuments({
+        status: "in-progress",
+      });
+
+      res.send({
+        totalUsers,
+        totalTasks,
+        activeTasks,
+      });
+    });
+
+    // admin user list api
+    app.get("/api/admin/user", async (req, res) => {
+      const users = await userCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .toArray();
+      const safeUsers = users.map(({ password, ...rest }) => rest);
+      res.send(safeUsers);
+    });
+
+    // payment
+    app.post("/api/payment", async (req, res) => {
+      try {
+        const {
+          proposalId,
+          taskId,
+          taskTitle,
+          clientName,
+          clientEmail,
+          freelancerName,
+          amount,
+          transactionId,
+          paymentMethod,
+          currency,
+          paymentStatus
+        } = req.body;
+
+        const paymentData = {
+          proposalId,
+          taskId,
+          taskTitle,
+          clientName,
+          clientEmail,
+          freelancerName,
+          amount,
+          transactionId,
+          paymentMethod,
+          currency,
+          paymentStatus,
+          paymentDate: new Date(),
+        };
+
+        isPaymentExist = await paymentCollection.findOne({ transactionId });
+        if (isPaymentExist) {
+          return res.status(200).send({ message: "Already Paid" });
+        }
+        // Save payment
+        const paymentResult = await paymentCollection.insertOne(paymentData);
+
+        // Update proposal status
+        await proposalCollection.updateOne(
+          { _id: new ObjectId(proposalId) },
+          {
+            $set: {
+              status: "accepted",
+            },
+          },
+        );
+
+        // Update task status
+        await taskCollection.updateOne(
+          { _id: new ObjectId(taskId) },
+          {
+            $set: {
+              status: "in-progress",
+            },
+          },
+        );
+
+        res.status(200).send({
+          success: true,
+          message: "Payment completed successfully",
+          paymentId: paymentResult.insertedId,
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    // payment data
+
+    // app.patch("/api/payment/success", async (req, res) => {
+    //   try {
+    //     const { proposalId, taskId } = req.body;
+
+    //     await proposalCollection.updateOne(
+    //       { _id: new ObjectId(proposalId) },
+    //       {
+    //         $set: {
+    //           status: "accepted",
+    //         },
+    //       },
+    //     );
+
+    //     await taskCollection.updateOne(
+    //       { _id: new ObjectId(taskId) },
+    //       {
+    //         $set: {
+    //           status: "in-progress",
+    //         },
+    //       },
+    //     );
+
+    //     res.send({
+    //       success: true,
+    //       message: "Payment verified successfully",
+    //     });
+    //   } catch (error) {
+    //     res.status(500).send({
+    //       message: error.message,
+    //     });
+    //   }
+    // });
 
     // await client.db("admin").command({ ping: 1 });
     console.log(
