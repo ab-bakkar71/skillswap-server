@@ -116,14 +116,39 @@ async function run() {
 
     // proposal data post api
     app.post("/api/proposal", async (req, res) => {
-      const proposal = req.body;
-      const finalProposal = {
-        ...proposal,
-        createdAt: new Date(),
-      };
+      try {
+        const proposal = req.body;
 
-      const result = await proposalCollection.insertOne(finalProposal);
-      res.send(result);
+        const alreadySubmitted = await proposalCollection.findOne({
+          taskId: proposal.taskId,
+          freelancerEmail: proposal.freelancerEmail,
+        });
+
+        if (alreadySubmitted) {
+          return res.status(400).send({
+            success: false,
+            message: "You have already submitted a proposal for this task.",
+          });
+        }
+
+        const finalProposal = {
+          ...proposal,
+          createdAt: new Date(),
+          status: "pending",
+        };
+
+        const result = await proposalCollection.insertOne(finalProposal);
+
+        res.status(201).send({
+          success: true,
+          result,
+        });
+      } catch (error) {
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
     });
 
     // proposal show on freelancer dashboard api
@@ -185,10 +210,16 @@ async function run() {
         status: "in-progress",
       });
 
+      const revenueData = await paymentCollection
+        .aggregate([{ $group: { _id: null, total: { $sum: "$amount" } } }])
+        .toArray();
+      const totalRevenue = revenueData[0]?.total || 0;
+
       res.send({
         totalUsers,
         totalTasks,
         activeTasks,
+        totalRevenue,
       });
     });
 
@@ -216,7 +247,7 @@ async function run() {
           transactionId,
           paymentMethod,
           currency,
-          paymentStatus
+          paymentStatus,
         } = req.body;
 
         const paymentData = {
