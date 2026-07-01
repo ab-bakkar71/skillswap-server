@@ -292,6 +292,18 @@ async function run() {
           },
         );
 
+        // reject other proposals for the same task
+        await proposalCollection.updateMany(
+          {
+            taskId,
+            _id: { $ne: new ObjectId(proposalId) },
+          },
+          {
+            $set: {
+              status: "rejected",
+            },
+          },
+        );
         res.status(200).send({
           success: true,
           message: "Payment completed successfully",
@@ -318,7 +330,7 @@ async function run() {
     });
 
     // edit task
-     app.patch("/api/client/update/:id", async (req, res) => {
+    app.patch("/api/client/update/:id", async (req, res) => {
       try {
         const id = req.params.id;
         const { title, budget, deadline, description } = req.body;
@@ -340,7 +352,25 @@ async function run() {
       }
     });
 
+    // reject Proposal
+    app.patch("/api/proposal/reject/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const newStatus = "rejected";
 
+        const updateDoc = {
+          $set: {
+            status: newStatus,
+          },
+        };
+        const result = await proposalCollection.updateOne(filter, updateDoc);
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Internal Server Error" });
+      }
+    });
 
     // await client.db("admin").command({ ping: 1 });
     console.log(
