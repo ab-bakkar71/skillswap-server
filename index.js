@@ -234,7 +234,7 @@ async function run() {
     });
 
     // payment
-    app.post("/api/payment", async (req, res) => {
+    app.post("/api/confirm-session", async (req, res) => {
       try {
         const {
           proposalId,
@@ -306,40 +306,41 @@ async function run() {
       }
     });
 
-    // payment data
+    // delete task
+    app.delete("/api/client/task/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = {
+        _id: new ObjectId(id),
+      };
+      const result = await taskCollection.deleteOne(query);
+      console.log(result);
+      res.send(result);
+    });
 
-    // app.patch("/api/payment/success", async (req, res) => {
-    //   try {
-    //     const { proposalId, taskId } = req.body;
+    // edit task
+     app.patch("/api/client/update/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { title, budget, deadline, description } = req.body;
+        const filter = { _id: new ObjectId(id) };
 
-    //     await proposalCollection.updateOne(
-    //       { _id: new ObjectId(proposalId) },
-    //       {
-    //         $set: {
-    //           status: "accepted",
-    //         },
-    //       },
-    //     );
+        const updateDoc = {
+          $set: {
+            title,
+            budget,
+            deadline,
+            description,
+          },
+        };
+        const result = await taskCollection.updateOne(filter, updateDoc);
+        res.send(result);
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({ error: "Internal Server Error" });
+      }
+    });
 
-    //     await taskCollection.updateOne(
-    //       { _id: new ObjectId(taskId) },
-    //       {
-    //         $set: {
-    //           status: "in-progress",
-    //         },
-    //       },
-    //     );
 
-    //     res.send({
-    //       success: true,
-    //       message: "Payment verified successfully",
-    //     });
-    //   } catch (error) {
-    //     res.status(500).send({
-    //       message: error.message,
-    //     });
-    //   }
-    // });
 
     // await client.db("admin").command({ ping: 1 });
     console.log(
