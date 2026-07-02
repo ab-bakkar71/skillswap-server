@@ -75,7 +75,8 @@ async function run() {
 
     // all task api
     app.get("/api/tasks", async (req, res) => {
-      const cursor = await taskCollection.find();
+      const query = { status: "open" };
+      const cursor = await taskCollection.find(query);
       const result = await cursor.toArray();
       res.send(result);
     });
@@ -109,7 +110,7 @@ async function run() {
       const result = await taskCollection
         .find(query)
         .sort({ createAt: -1 })
-        .limit(4)
+        .limit(6)
         .toArray();
       res.json(result);
     });
@@ -325,7 +326,7 @@ async function run() {
         _id: new ObjectId(id),
       };
       const result = await taskCollection.deleteOne(query);
-      console.log(result);
+
       res.send(result);
     });
 
@@ -370,6 +371,115 @@ async function run() {
         console.error(error);
         res.status(500).send({ error: "Internal Server Error" });
       }
+    });
+
+    // complete task
+    app.patch("/api/proposal/complete/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { deliverableUrl } = req.body;
+
+        // Proposal খুঁজে বের করো
+        const proposal = await proposalCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!proposal) {
+          return res.status(404).send({
+            success: false,
+            message: "Proposal not found",
+          });
+        }
+
+        // Proposal update
+        await proposalCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status: "completed",
+              deliverableUrl,
+              completedAt: new Date(),
+            },
+          },
+        );
+
+        // Related Task update
+        await taskCollection.updateOne(
+          { _id: new ObjectId(proposal.taskId) },
+          {
+            $set: {
+              status: "completed",
+            },
+          },
+        );
+
+        res.send({
+          success: true,
+          message: "Task marked as completed successfully.",
+        });
+      } catch (error) {
+        console.error(error);
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    // user block api
+    app.patch("/api/users/block/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        if (!["block", "active"].includes(status)) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid status",
+          });
+        }
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              status,
+            },
+          },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        res.send({
+          success: true,
+          message:
+            status === "block"
+              ? "User blocked successfully."
+              : "User unblocked successfully.",
+          result,
+        });
+      } catch (error) {
+        console.error(error);
+
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    // admin payment list api
+    app.get("/api/admin/payment", async (req, res) => {
+      const payments = await paymentCollection.find({}).toArray();
+      res.send({
+        success: true,
+        data: payments,
+      });
     });
 
     // await client.db("admin").command({ ping: 1 });
