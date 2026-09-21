@@ -62,7 +62,7 @@ const callGeminiChatAPI = async (systemInstruction, history = [], userMessage) =
       });
       contents.push({
         role: "model",
-        parts: [{ text: "Understood. I am SwapBot, the intelligent assistant for SkillSwap. I will adhere strictly to these rules." }],
+        parts: [{ text: "Understood. I am SwapAi Assistant, the intelligent assistant for SkillSwap. I will adhere strictly to these rules." }],
       });
     }
 
@@ -571,7 +571,7 @@ Evaluate the task carefully and respond strictly with a valid JSON object contai
 };
 
 /**
- * Smart contextual fallback reply generator for SwapBot
+ * Smart contextual fallback reply generator for SwapAi Assistant
  */
 const generateFallbackChatReply = ({ message, openTasks = [], userStats }) => {
   const q = (message || "").toLowerCase().trim();
@@ -588,7 +588,7 @@ const generateFallbackChatReply = ({ message, openTasks = [], userStats }) => {
   ) {
     return {
       reply:
-        "Hello! 👋 I'm **SwapBot**, your intelligent assistant for SkillSwap.\n\n" +
+        "Hello! 👋 I'm **SwapAi Assistant**, your intelligent assistant for SkillSwap.\n\n" +
         "I can help you with:\n" +
         "- 🔍 **Finding live tasks** matching your skills\n" +
         "- ✍️ **Drafting a task description** for clients\n" +
@@ -817,7 +817,7 @@ const chatWithAI = async (req, res) => {
       )
       .join("\n");
 
-    const systemInstruction = `You are SwapBot, the intelligent assistant for the SkillSwap freelancing platform.
+    const systemInstruction = `You are SwapAi Assistant, the intelligent assistant for the SkillSwap freelancing platform.
 Key Platform Links:
 - Browse Tasks: /tasks
 - Task Details: /tasks/:id
