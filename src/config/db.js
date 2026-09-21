@@ -20,6 +20,7 @@ async function initIndexes(database) {
     const proposalCollection = database.collection("proposal");
     const paymentCollection = database.collection("payment");
     const reviewCollection = database.collection("review");
+    const notificationCollection = database.collection("notification");
 
     await Promise.allSettled([
       taskCollection.createIndex({ clientEmail: 1 }),
@@ -40,6 +41,8 @@ async function initIndexes(database) {
       reviewCollection.createIndex({ clientEmail: 1 }),
       reviewCollection.createIndex({ proposalId: 1 }, { unique: true, sparse: true }),
       reviewCollection.createIndex({ taskId: 1 }),
+      notificationCollection.createIndex({ recipientEmail: 1, createdAt: -1 }),
+      notificationCollection.createIndex({ recipientEmail: 1, isRead: 1 }),
     ]);
   } catch (err) {
     console.warn("Index initialization notice:", err.message);
@@ -58,6 +61,7 @@ async function connectDB() {
     proposalCollection: db.collection("proposal"),
     paymentCollection: db.collection("payment"),
     reviewCollection: db.collection("review"),
+    notificationCollection: db.collection("notification"),
   };
 
   await initIndexes(db);

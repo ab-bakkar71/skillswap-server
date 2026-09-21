@@ -1,6 +1,7 @@
 const { ObjectId } = require("mongodb");
 const { getCollections } = require("../config/db");
 const { isValidObjectId } = require("../utils/helpers");
+const { createNotification } = require("./notificationController");
 
 // Payment confirmation
 const confirmSession = async (req, res) => {
@@ -102,6 +103,19 @@ const confirmSession = async (req, res) => {
         },
       }
     );
+
+    // Notify hired freelancer
+    if (paymentData.freelancerEmail) {
+      createNotification({
+        recipientEmail: paymentData.freelancerEmail,
+        senderEmail: paymentData.clientEmail,
+        senderName: paymentData.clientName || "Client",
+        title: "You're Hired! 🚀",
+        message: `${paymentData.clientName || "Client"} accepted your proposal and funded $${paymentData.amount} for "${paymentData.taskTitle}". You can now start working!`,
+        link: `/dashboard/freelancer/active-project`,
+        type: "proposal_accepted",
+      }).catch(() => {});
+    }
 
     res.status(200).send({
       success: true,

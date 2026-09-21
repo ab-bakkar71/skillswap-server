@@ -1,6 +1,7 @@
 const { ObjectId } = require("mongodb");
 const { getCollections } = require("../config/db");
 const { isValidObjectId } = require("../utils/helpers");
+const { createNotification } = require("./notificationController");
 
 // Submit Proposal
 const createProposal = async (req, res) => {
@@ -53,6 +54,18 @@ const createProposal = async (req, res) => {
     };
 
     const result = await proposalCollection.insertOne(finalProposal);
+
+    if (finalProposal.clientEmail) {
+      createNotification({
+        recipientEmail: finalProposal.clientEmail,
+        senderEmail: finalProposal.freelancerEmail,
+        senderName: finalProposal.freelancerName || "A Freelancer",
+        title: "New Proposal Received",
+        message: `${finalProposal.freelancerName || "A freelancer"} submitted a proposal of $${finalProposal.proposedBudget} for "${finalProposal.taskTitle || "your task"}"`,
+        link: `/dashboard/client/proposal`,
+        type: "proposal_received",
+      }).catch(() => {});
+    }
 
     res.status(201).send({
       success: true,
@@ -175,6 +188,7 @@ const rejectProposal = async (req, res) => {
     }
 
     const filter = { _id: new ObjectId(id) };
+    const prop = await proposalCollection.findOne(filter);
     const updateDoc = {
       $set: {
         status: "rejected",
@@ -183,6 +197,19 @@ const rejectProposal = async (req, res) => {
     };
 
     const result = await proposalCollection.updateOne(filter, updateDoc);
+
+    if (prop?.freelancerEmail) {
+      createNotification({
+        recipientEmail: prop.freelancerEmail,
+        senderEmail: prop.clientEmail,
+        senderName: "Client",
+        title: "Proposal Not Selected",
+        message: `Your proposal for "${prop.taskTitle || "task"}" was not selected.`,
+        link: `/dashboard/freelancer/proposals`,
+        type: "proposal_rejected",
+      }).catch(() => {});
+    }
+
     res.send(result);
   } catch (error) {
     console.error("Error rejecting proposal:", error);
@@ -246,6 +273,18 @@ const submitWork = async (req, res) => {
       );
     }
 
+    if (proposal.clientEmail) {
+      createNotification({
+        recipientEmail: proposal.clientEmail,
+        senderEmail: proposal.freelancerEmail,
+        senderName: proposal.freelancerName || "Freelancer",
+        title: "Work Deliverable Submitted",
+        message: `${proposal.freelancerName || "Freelancer"} submitted the work for "${proposal.taskTitle || "your task"}". Please review and approve.`,
+        link: `/dashboard/client/my-task/${proposal.taskId}`,
+        type: "work_submitted",
+      }).catch(() => {});
+    }
+
     res.send({
       success: true,
       message: "Work submitted successfully for client review.",
@@ -299,6 +338,18 @@ const approveWork = async (req, res) => {
           },
         }
       );
+    }
+
+    if (proposal.freelancerEmail) {
+      createNotification({
+        recipientEmail: proposal.freelancerEmail,
+        senderEmail: proposal.clientEmail,
+        senderName: "Client",
+        title: "Work Approved & Completed! 🎉",
+        message: `Client approved your work for "${proposal.taskTitle || "task"}". Earnings have been added to your balance!`,
+        link: `/dashboard/freelancer/earn`,
+        type: "work_approved",
+      }).catch(() => {});
     }
 
     res.send({
@@ -362,6 +413,18 @@ const requestRevision = async (req, res) => {
           },
         }
       );
+    }
+
+    if (proposal.freelancerEmail) {
+      createNotification({
+        recipientEmail: proposal.freelancerEmail,
+        senderEmail: proposal.clientEmail,
+        senderName: "Client",
+        title: "Revision Requested 🔄",
+        message: `Client requested changes on "${proposal.taskTitle || "task"}": "${String(revisionNotes).slice(0, 100)}"`,
+        link: `/dashboard/freelancer/active-project`,
+        type: "revision_requested",
+      }).catch(() => {});
     }
 
     res.send({

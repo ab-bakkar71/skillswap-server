@@ -20,6 +20,7 @@ const paymentRoutes = require("./src/routes/paymentRoutes");
 const adminRoutes = require("./src/routes/adminRoutes");
 const reviewRoutes = require("./src/routes/reviewRoutes");
 const aiRoutes = require("./src/routes/aiRoutes");
+const notificationRoutes = require("./src/routes/notificationRoutes");
 
 const app = express();
 const port = process.env.PORT || 8000;
@@ -48,6 +49,7 @@ app.use(paymentRoutes);
 app.use(adminRoutes);
 app.use(reviewRoutes);
 app.use(aiRoutes);
+app.use(notificationRoutes);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
