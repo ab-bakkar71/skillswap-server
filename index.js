@@ -391,6 +391,14 @@ async function run() {
           return res.status(200).send({ success: true, message: "Already Paid" });
         }
 
+        let fEmail = req.body.freelancerEmail;
+        if (!fEmail && isValidObjectId(proposalId)) {
+          const prop = await proposalCollection.findOne({ _id: new ObjectId(proposalId) });
+          if (prop?.freelancerEmail) {
+            fEmail = prop.freelancerEmail;
+          }
+        }
+
         const paymentData = {
           proposalId,
           taskId,
@@ -398,6 +406,7 @@ async function run() {
           clientName,
           clientEmail,
           freelancerName,
+          freelancerEmail: fEmail || "",
           amount: Number(amount) || 0,
           transactionId,
           paymentMethod: paymentMethod || "card",
@@ -699,6 +708,63 @@ async function run() {
         });
       } catch (error) {
         console.error("Error fetching payments:", error);
+        res.status(500).send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    // client payment history api
+    app.get("/api/payment/client/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        if (!email) {
+          return res.status(400).send({ success: false, message: "Email is required" });
+        }
+        const payments = await paymentCollection
+          .find({ clientEmail: email })
+          .sort({ paymentDate: -1, createdAt: -1 })
+          .toArray();
+        res.send({
+          success: true,
+          data: payments,
+        });
+      } catch (error) {
+        console.error("Error fetching client payments:", error);
+        res.status(500).send({ success: false, message: "Internal Server Error" });
+      }
+    });
+
+    // freelancer earnings & payment history api
+    app.get("/api/payment/freelancer/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+        if (!email) {
+          return res.status(400).send({ success: false, message: "Email is required" });
+        }
+
+        // Find freelancer proposals to match payments by proposalId, taskId or direct freelancerEmail
+        const freelancerProposals = await proposalCollection
+          .find({ freelancerEmail: email })
+          .toArray();
+        const proposalIds = freelancerProposals.map((p) => String(p._id));
+        const taskIds = freelancerProposals.map((p) => String(p.taskId));
+
+        const payments = await paymentCollection
+          .find({
+            $or: [
+              { freelancerEmail: email },
+              { proposalId: { $in: proposalIds } },
+              { taskId: { $in: taskIds } },
+            ],
+          })
+          .sort({ paymentDate: -1, createdAt: -1 })
+          .toArray();
+
+        res.send({
+          success: true,
+          data: payments,
+        });
+      } catch (error) {
+        console.error("Error fetching freelancer payments:", error);
         res.status(500).send({ success: false, message: "Internal Server Error" });
       }
     });
