@@ -33,4 +33,11 @@ router.post(
   aiController.summarizeTask
 );
 
+router.post(
+  "/api/ai/chat",
+  verifyInternalAuth,
+  writeRateLimiter(60),
+  aiController.chatWithAI
+);
+
 module.exports = router;

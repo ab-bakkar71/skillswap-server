@@ -1,4 +1,5 @@
 // AI Controller supporting Gemini API with smart fallback generation
+const { getCollections } = require("../config/db");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "";
 
@@ -38,6 +39,76 @@ const callGeminiAPI = async (prompt) => {
     return JSON.parse(rawText);
   } catch (err) {
     console.warn("Gemini API parsing/network error:", err.message);
+    return null;
+  }
+};
+
+/**
+ * Helper to call Gemini REST API for multi-turn chatbot conversation
+ */
+const callGeminiChatAPI = async (systemInstruction, history = [], userMessage) => {
+  if (!GEMINI_API_KEY) return null;
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+    const contents = [];
+
+    // Prepend system context as prime instruction
+    if (systemInstruction) {
+      contents.push({
+        role: "user",
+        parts: [{ text: `[SYSTEM CONTEXT & INSTRUCTIONS]:\n${systemInstruction}\nPlease acknowledge understanding.` }],
+      });
+      contents.push({
+        role: "model",
+        parts: [{ text: "Understood. I am SwapBot, the intelligent assistant for SkillSwap. I will adhere strictly to these rules." }],
+      });
+    }
+
+    // Append history (last 6 turns)
+    if (Array.isArray(history)) {
+      for (const msg of history.slice(-6)) {
+        const text = msg.content || msg.text || "";
+        if (!text) continue;
+        const role = (msg.role === "assistant" || msg.role === "model" || msg.sender === "bot") ? "model" : "user";
+        contents.push({
+          role,
+          parts: [{ text }],
+        });
+      }
+    }
+
+    // Append current user message
+    contents.push({
+      role: "user",
+      parts: [{ text: userMessage }],
+    });
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents,
+        generationConfig: {
+          temperature: 0.7,
+          responseMimeType: "application/json",
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn("Gemini Chat API call failed:", response.status, response.statusText);
+      return null;
+    }
+
+    const data = await response.json();
+    const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) return null;
+
+    return JSON.parse(rawText);
+  } catch (err) {
+    console.warn("Gemini Chat API error:", err.message);
     return null;
   }
 };
@@ -499,9 +570,325 @@ Evaluate the task carefully and respond strictly with a valid JSON object contai
   }
 };
 
+/**
+ * Smart contextual fallback reply generator for SwapBot
+ */
+const generateFallbackChatReply = ({ message, openTasks = [], userStats }) => {
+  const q = (message || "").toLowerCase().trim();
+
+  // 1. Bengali / English Greetings
+  if (
+    q.includes("hi") ||
+    q.includes("hello") ||
+    q.includes("hey") ||
+    q.includes("সালাম") ||
+    q.includes("কেমন") ||
+    q.includes("help") ||
+    q.length < 4
+  ) {
+    return {
+      reply:
+        "Hello! 👋 I'm **SwapBot**, your intelligent assistant for SkillSwap.\n\n" +
+        "I can help you with:\n" +
+        "- 🔍 **Finding live tasks** matching your skills\n" +
+        "- ✍️ **Drafting a task description** for clients\n" +
+        "- 💡 **Proposal winning strategies** for freelancers\n" +
+        "- ❓ **Platform rules & escrow payment** questions\n\n" +
+        "What would you like to explore today?",
+      suggestedChips: [
+        "🔍 Find active tasks",
+        "✍️ Help me post a task",
+        "💡 How to win proposals",
+        "❓ How does SkillSwap work?",
+      ],
+    };
+  }
+
+  // 2. Task Discovery / Search
+  if (
+    q.includes("task") ||
+    q.includes("job") ||
+    q.includes("কাজ") ||
+    q.includes("find") ||
+    q.includes("search") ||
+    q.includes("খোঁজ") ||
+    q.includes("react") ||
+    q.includes("web") ||
+    q.includes("design") ||
+    q.includes("logo")
+  ) {
+    if (openTasks && openTasks.length > 0) {
+      const taskList = openTasks
+        .slice(0, 4)
+        .map(
+          (t) =>
+            `- **[${t.title}](/tasks/${t._id})**\n  Budget: **$${t.budget}** | Category: *${t.category}*`
+        )
+        .join("\n\n");
+
+      return {
+        reply:
+          "Here are recent open tasks available on SkillSwap right now:\n\n" +
+          taskList +
+          "\n\n👉 You can browse all tasks on the [Browse Tasks](/tasks) page!",
+        suggestedChips: [
+          "Browse all tasks",
+          "Tips to win proposals",
+          "How to post a task",
+        ],
+      };
+    } else {
+      return {
+        reply:
+          "You can browse all currently available tasks on the [Browse Tasks](/tasks) page! Use filters to find tasks in Web Development, Graphic Design, Content Writing, and more.",
+        suggestedChips: [
+          "Browse all tasks",
+          "How to submit a proposal",
+          "Post a new task",
+        ],
+      };
+    }
+  }
+
+  // 3. Post a task / Help client
+  if (
+    q.includes("post") ||
+    q.includes("create") ||
+    q.includes("হায়ার") ||
+    q.includes("hire") ||
+    q.includes("client") ||
+    q.includes("পোস্ট") ||
+    q.includes("ড্রাফট")
+  ) {
+    return {
+      reply:
+        "Posting a task on SkillSwap is quick and effortless! 🚀\n\n" +
+        "1. Visit the [Create Task Page](/dashboard/client/create-task) (or click 'Post a Task').\n" +
+        "2. Add a clear title, scope of deliverables, and budget.\n" +
+        "3. You can even use our **AI Task Assistant** to auto-generate the description in seconds!\n" +
+        "4. Freelancers will submit proposals, and you can review their cover notes and accept the best fit.",
+      suggestedChips: [
+        "Go to Create Task",
+        "How do payments work?",
+        "🔍 Find active tasks",
+      ],
+    };
+  }
+
+  // 4. Proposal tips & winning strategies
+  if (
+    q.includes("proposal") ||
+    q.includes("প্রপোজাল") ||
+    q.includes("bid") ||
+    q.includes("win") ||
+    q.includes("cover note") ||
+    q.includes("টিপস")
+  ) {
+    return {
+      reply:
+        "Here are 4 proven tips to win more proposals on SkillSwap: 🏆\n\n" +
+        "1. **Directly address the client's problem**: Don't use a generic template. Reference the exact task scope.\n" +
+        "2. **Highlight relevant work**: Mention 1 or 2 specific projects similar to the task.\n" +
+        "3. **Clear delivery timeline**: Specify how you will achieve the milestones within the deadline.\n" +
+        "4. **Leverage AI Assistant**: On any task page, check the **AI Task Summary** to ensure it's a good match before submitting!",
+      suggestedChips: [
+        "🔍 Find tasks to bid on",
+        "View My Proposals",
+        "How SkillSwap works",
+      ],
+    };
+  }
+
+  // 5. Platform guidance & Escrow
+  if (
+    q.includes("how") ||
+    q.includes("কিভাবে") ||
+    q.includes("rules") ||
+    q.includes("payment") ||
+    q.includes("escrow") ||
+    q.includes("টাকা") ||
+    q.includes("safe") ||
+    q.includes("fee")
+  ) {
+    return {
+      reply:
+        "Here is how SkillSwap works: 🤝\n\n" +
+        "- **Escrow Protection**: Client funds are held securely when hiring and only released once the deliverable is completed and approved.\n" +
+        "- **Transparent Workflow**: Clients and freelancers can communicate, submit proposals, track progress, and exchange reviews.\n" +
+        "- **Dashboard Management**: Monitor your active work anytime on the [Dashboard](/dashboard).",
+      suggestedChips: [
+        "🔍 Explore Tasks",
+        "✍️ Post a Task",
+        "Go to Dashboard",
+      ],
+    };
+  }
+
+  // 6. User Status
+  if (
+    q.includes("status") ||
+    q.includes("স্ট্যাটাস") ||
+    q.includes("আমার") ||
+    q.includes("my")
+  ) {
+    if (userStats) {
+      return {
+        reply:
+          `Here is your current SkillSwap activity snapshot:\n\n` +
+          `- **Pending Proposals**: ${userStats.pendingProposals}\n` +
+          `- **Active Client Tasks**: ${userStats.clientTasks}\n\n` +
+          `You can view complete details in your [Dashboard](/dashboard)!`,
+        suggestedChips: [
+          "View My Proposals",
+          "🔍 Find more tasks",
+          "Post a new task",
+        ],
+      };
+    }
+  }
+
+  // Default helpful response
+  return {
+    reply:
+      "I'm here to help you get the most out of SkillSwap! 🚀\n\n" +
+      "You can ask me to find tasks, guide you through posting a new task, share tips on writing winning proposals, or explain platform rules and payments.\n\n" +
+      "Quick links:\n" +
+      "- [Browse All Tasks](/tasks)\n" +
+      "- [Post a Task](/dashboard/client/create-task)\n" +
+      "- [My Dashboard](/dashboard)",
+    suggestedChips: [
+      "🔍 Find active tasks",
+      "✍️ Help me post a task",
+      "💡 Proposal winning tips",
+      "❓ How does SkillSwap work?",
+    ],
+  };
+};
+
+/**
+ * Controller: AI Chatbot conversation with platform context
+ */
+const chatWithAI = async (req, res) => {
+  try {
+    const { message, history, userEmail, userRole } = req.body;
+
+    if (!message || !message.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Message is required.",
+      });
+    }
+
+    // 1. Fetch live contextual data from MongoDB
+    let openTasks = [];
+    let userStats = null;
+
+    try {
+      const collections = getCollections();
+      if (collections?.taskCollection) {
+        openTasks = await collections.taskCollection
+          .find({ status: "open" })
+          .sort({ createdAt: -1 })
+          .limit(6)
+          .project({ title: 1, budget: 1, category: 1, requiredSkills: 1, _id: 1 })
+          .toArray();
+      }
+
+      if (userEmail && collections?.proposalCollection && collections?.taskCollection) {
+        const pendingProposals = await collections.proposalCollection.countDocuments({
+          freelancerEmail: userEmail,
+          status: "pending",
+        });
+        const clientTasks = await collections.taskCollection.countDocuments({
+          clientEmail: userEmail,
+          status: "open",
+        });
+        userStats = { pendingProposals, clientTasks };
+      }
+    } catch (dbErr) {
+      console.warn("Notice: Contextual DB fetch in chatWithAI:", dbErr.message);
+    }
+
+    // 2. Format system instruction with live data
+    const tasksSummary = (openTasks || [])
+      .map(
+        (t) =>
+          `ID: ${t._id}, Title: "${t.title}", Category: ${t.category}, Budget: $${t.budget}`
+      )
+      .join("\n");
+
+    const systemInstruction = `You are SwapBot, the intelligent assistant for the SkillSwap freelancing platform.
+Key Platform Links:
+- Browse Tasks: /tasks
+- Task Details: /tasks/:id
+- Client Post Task: /dashboard/client/create-task
+- Freelancer Proposals: /dashboard/freelancer/my-proposals
+- User Dashboard: /dashboard
+
+Current Open Tasks in Database:
+${tasksSummary || "No open tasks at the moment."}
+
+User Info:
+- Email: ${userEmail || "Guest"}
+- Role: ${userRole || "Visitor"}
+${userStats ? `- Pending Proposals: ${userStats.pendingProposals}, Open Posted Tasks: ${userStats.clientTasks}` : ""}
+
+Rules:
+1. Always be polite, concise, professional, and friendly.
+2. If the user greets or asks in Bengali, reply in natural Bengali. If in English, reply in English.
+3. When referencing tasks or pages, use markdown links like [Task Name](/tasks/id) or [Browse Tasks](/tasks).
+4. If asked to find tasks, recommend matching items from the Current Open Tasks list above.
+5. If asked to draft a task post, provide title, description, skills, and budget guidance.
+6. Provide short, actionable follow-up prompt suggestions in "suggestedChips".
+7. You MUST return a JSON object with this structure:
+{
+  "reply": "Markdown formatted string",
+  "suggestedChips": ["chip 1", "chip 2", "chip 3"]
+}`;
+
+    // 3. Call Gemini if available
+    if (GEMINI_API_KEY) {
+      const aiResult = await callGeminiChatAPI(systemInstruction, history, message);
+      if (aiResult && aiResult.reply) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            reply: aiResult.reply,
+            suggestedChips: Array.isArray(aiResult.suggestedChips)
+              ? aiResult.suggestedChips
+              : ["🔍 Find active tasks", "✍️ Post a task", "💡 Proposal tips"],
+          },
+          source: "gemini",
+        });
+      }
+    }
+
+    // 4. Fallback contextual responder
+    const fallback = generateFallbackChatReply({
+      message,
+      openTasks,
+      userStats,
+      userRole,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: fallback,
+      source: "contextual-ai",
+    });
+  } catch (error) {
+    console.error("Error in chatWithAI controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error processing chat message.",
+    });
+  }
+};
+
 module.exports = {
   generateTask,
   generateProposal,
   summarizeProposal,
   summarizeTask,
+  chatWithAI,
 };
