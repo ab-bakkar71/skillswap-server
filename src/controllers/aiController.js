@@ -357,8 +357,151 @@ Respond strictly with valid JSON.`;
   }
 };
 
+/**
+ * Fallback task summary & bidding verdict generator
+ */
+const generateFallbackTaskSummary = ({ title, description, category, budget, deadline }) => {
+  const numBudget = Number(budget) || 100;
+  const cat = category || "web-fixing";
+
+  let complexity = "Medium";
+  let estimatedEffort = "2-4 Days";
+  let verdict = "Highly Recommended to Bid";
+  let verdictType = "positive";
+  let verdictReason = "Clear project scope and fair budget proportion. Excellent match for freelancers with relevant domain skills.";
+  let requiredSkills = ["Problem Solving", "Timely Delivery", "Attention to Detail"];
+
+  if (cat === "web-fixing") {
+    requiredSkills = ["Frontend Debugging", "CSS / Responsive Layout", "JavaScript / React", "Browser Compatibility"];
+    complexity = numBudget > 200 ? "Medium" : "Low";
+    estimatedEffort = "1-3 Days";
+  } else if (cat === "graphics-design") {
+    requiredSkills = ["Figma", "Vector Graphics", "Brand Identity", "Visual Aesthetics"];
+    complexity = "Low";
+    estimatedEffort = "2-3 Days";
+  } else if (cat === "ui-ux") {
+    requiredSkills = ["Figma", "UI Design System", "Wireframing", "Component Layout"];
+    complexity = "Medium";
+    estimatedEffort = "3-5 Days";
+  } else if (cat === "content-writing") {
+    requiredSkills = ["SEO Content", "Research & Fact-Checking", "Proofreading"];
+    complexity = "Low";
+    estimatedEffort = "1-2 Days";
+  } else if (cat === "data-entry") {
+    requiredSkills = ["Excel / Google Sheets", "Data Cleansing", "High Accuracy"];
+    complexity = "Low";
+    estimatedEffort = "1-2 Days";
+  }
+
+  if (numBudget < 35) {
+    verdict = "Consider Carefully";
+    verdictType = "caution";
+    verdictReason = "Budget is on the lower side. Ensure the scope is strictly minimal before placing a bid.";
+  } else if (numBudget >= 120) {
+    verdict = "Highly Recommended to Bid";
+    verdictType = "positive";
+    verdictReason = "Strong client budget with healthy reward-to-effort ratio. Great chance to earn and build ratings.";
+  } else {
+    verdict = "Good Opportunity";
+    verdictType = "neutral";
+    verdictReason = "Fair compensation matching market standard micro-tasks. Suitable for building client relations.";
+  }
+
+  const executiveSummary = `Client requires assistance with "${title || "task"}". The focus is on clean deliverables, milestone turnaround, and problem resolution within ${estimatedEffort}.`;
+
+  return {
+    executiveSummary,
+    verdict,
+    verdictType,
+    verdictReason,
+    complexity,
+    budgetEvaluation: numBudget >= 120 ? `Generous Budget ($${numBudget})` : `Fair Rate ($${numBudget})`,
+    estimatedEffort,
+    requiredSkills,
+    winningTip: `Emphasize relevant work samples and confirm you can deliver within ${estimatedEffort} to stand out.`,
+  };
+};
+
+/**
+ * POST /api/ai/summarize-task
+ * Summarizes task requirements and gives bidding advice for freelancers
+ */
+const summarizeTask = async (req, res) => {
+  try {
+    const { title, description, category, budget, deadline } = req.body || {};
+
+    if (!title && !description) {
+      return res.status(400).json({
+        success: false,
+        message: "Task information is required.",
+      });
+    }
+
+    if (GEMINI_API_KEY) {
+      const prompt = `You are a career mentor and senior proposal consultant for freelancers on SkillSwap.
+A freelancer is evaluating this task to decide whether to submit a proposal:
+Task Title: "${title || "N/A"}"
+Category: "${category || "general"}"
+Client Budget: "$${budget || "N/A"}"
+Client Deadline: "${deadline || "Flexible"}"
+Task Description: "${(description || "").slice(0, 1500)}"
+
+Evaluate the task carefully and respond strictly with a valid JSON object containing:
+- "executiveSummary": A concise 1-2 sentence executive summary explaining what the client actually needs done.
+- "verdict": Short verdict string, strictly one of: ["Highly Recommended to Bid", "Good Opportunity", "Consider Carefully"].
+- "verdictType": Strictly one of: ["positive", "neutral", "caution"].
+- "verdictReason": 1-2 sentences explaining why the freelancer should or shouldn't bid (evaluating budget vs effort, clarity of instructions).
+- "complexity": "Low", "Medium", or "High".
+- "budgetEvaluation": A short phrase assessing the budget (e.g. "Fair Rate for Scope", "Generous Budget", or "Low for Workload").
+- "estimatedEffort": Realistic effort duration (e.g. "2-3 Days").
+- "requiredSkills": Array of 3-4 key skill strings needed to succeed.
+- "winningTip": One practical tip for writing a winning pitch for this specific task.`;
+
+      const aiResult = await callGeminiAPI(prompt);
+      if (aiResult && aiResult.executiveSummary && aiResult.verdict) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            executiveSummary: aiResult.executiveSummary,
+            verdict: aiResult.verdict,
+            verdictType: aiResult.verdictType || "positive",
+            verdictReason: aiResult.verdictReason || "Task provides clear scope and attainable requirements.",
+            complexity: aiResult.complexity || "Medium",
+            budgetEvaluation: aiResult.budgetEvaluation || "Fair Market Rate",
+            estimatedEffort: aiResult.estimatedEffort || "2-3 Days",
+            requiredSkills: Array.isArray(aiResult.requiredSkills) ? aiResult.requiredSkills : [],
+            winningTip: aiResult.winningTip || "Demonstrate prior experience with similar projects in your cover note.",
+          },
+          source: "gemini",
+        });
+      }
+    }
+
+    const fallback = generateFallbackTaskSummary({
+      title,
+      description,
+      category,
+      budget,
+      deadline,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: fallback,
+      source: "contextual-ai",
+    });
+  } catch (error) {
+    console.error("Error in summarizeTask AI controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error analyzing task.",
+    });
+  }
+};
+
 module.exports = {
   generateTask,
   generateProposal,
   summarizeProposal,
+  summarizeTask,
 };
