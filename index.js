@@ -22,6 +22,83 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Security Headers Middleware
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  next();
+});
+
+// Lightweight In-Memory Rate Limiter for write endpoints
+const rateLimitMap = new Map();
+const writeRateLimiter = (maxRequests = 100, windowMs = 60000) => {
+  return (req, res, next) => {
+    const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown";
+    const key = `${ip}:${req.baseUrl || req.path}`;
+    const now = Date.now();
+    const record = rateLimitMap.get(key) || { count: 0, resetTime: now + windowMs };
+
+    if (now > record.resetTime) {
+      record.count = 1;
+      record.resetTime = now + windowMs;
+    } else {
+      record.count += 1;
+    }
+    rateLimitMap.set(key, record);
+
+    if (record.count > maxRequests) {
+      return res.status(429).json({
+        success: false,
+        message: "Too many requests. Please try again in a minute.",
+      });
+    }
+    next();
+  };
+};
+
+// Cleanup rate limit records every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of rateLimitMap.entries()) {
+    if (now > val.resetTime) rateLimitMap.delete(key);
+  }
+}, 300000);
+
+// Helper to escape regex special characters (prevent ReDoS / regex injection)
+const escapeRegex = (string) => {
+  if (typeof string !== "string") return "";
+  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+// Internal Authentication & Authorization Guards
+const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET || "skillswap_super_secret_internal_key_2026";
+
+const verifyInternalAuth = (req, res, next) => {
+  const secret = req.headers["x-internal-secret"];
+  if (secret && secret === INTERNAL_SECRET) {
+    return next();
+  }
+  return res.status(401).json({
+    success: false,
+    message: "Unauthorized: Invalid or missing authentication credentials.",
+  });
+};
+
+const requireAdminAuth = (req, res, next) => {
+  const secret = req.headers["x-internal-secret"];
+  const userRole = req.headers["x-user-role"];
+
+  if (secret === INTERNAL_SECRET && userRole === "admin") {
+    return next();
+  }
+  return res.status(403).json({
+    success: false,
+    message: "Forbidden: Administrator privileges required.",
+  });
+};
+
 const uri = process.env.MONGO_DB_URI;
 const client = new MongoClient(uri, {
   serverApi: {
@@ -76,7 +153,7 @@ async function run() {
     await initIndexes(database);
 
     // post task api
-    app.post("/api/task", async (req, res) => {
+    app.post("/api/task", verifyInternalAuth, writeRateLimiter(60), async (req, res) => {
       try {
         const task = req.body;
         if (!task.title || !task.clientEmail) {
@@ -86,9 +163,25 @@ async function run() {
           });
         }
 
+        const parsedBudget = Number(task.budget);
+        if (isNaN(parsedBudget) || parsedBudget <= 0) {
+          return res.status(400).send({
+            success: false,
+            message: "Budget must be a valid positive number.",
+          });
+        }
+
+        const userEmail = req.headers["x-user-email"];
+        if (userEmail && task.clientEmail !== userEmail) {
+          return res.status(403).send({
+            success: false,
+            message: "Forbidden: Cannot post task for another user.",
+          });
+        }
+
         const newTask = {
           ...task,
-          budget: Number(task.budget) || task.budget,
+          budget: parsedBudget,
           status: task.status || "open",
           createdAt: new Date(),
           createAt: new Date(),
@@ -102,12 +195,19 @@ async function run() {
     });
 
     // client my task api
-    app.get("/api/task/:email", async (req, res) => {
+    app.get("/api/task/:email", verifyInternalAuth, async (req, res) => {
       try {
         const email = req.params.email;
         if (!email) {
           return res.status(400).send({ success: false, message: "Email is required" });
         }
+
+        const reqEmail = req.headers["x-user-email"];
+        const reqRole = req.headers["x-user-role"];
+        if (reqRole !== "admin" && reqEmail && reqEmail !== email) {
+          return res.status(403).send({ success: false, message: "Forbidden: Cannot access other client tasks." });
+        }
+
         const query = {
           clientEmail: email,
         };
@@ -123,10 +223,17 @@ async function run() {
     });
 
     // Edit freelancer data api
-    app.patch("/api/freelancer/update/:email", async (req, res) => {
+    app.patch("/api/freelancer/update/:email", verifyInternalAuth, async (req, res) => {
       try {
         const email = req.params.email;
         const updateData = req.body;
+
+        const reqEmail = req.headers["x-user-email"];
+        const reqRole = req.headers["x-user-role"];
+        if (reqRole !== "admin" && reqEmail && reqEmail !== email) {
+          return res.status(403).send({ success: false, message: "Forbidden: Cannot update other freelancer profiles." });
+        }
+
         const query = { email: email };
 
         const updateDoc = {
@@ -153,15 +260,17 @@ async function run() {
         const { search, category, sort, page, limit } = req.query;
         const query = { status: "open" };
 
-        if (category && category !== "all") {
-          query.category = { $regex: new RegExp(`^${category}$`, "i") };
+        if (category && typeof category === "string" && category !== "all") {
+          const cleanCategory = escapeRegex(category.trim());
+          query.category = { $regex: new RegExp(`^${cleanCategory}$`, "i") };
         }
 
-        if (search && search.trim()) {
+        if (search && typeof search === "string" && search.trim()) {
+          const cleanSearch = escapeRegex(search.trim());
           query.$or = [
-            { title: { $regex: search.trim(), $options: "i" } },
-            { description: { $regex: search.trim(), $options: "i" } },
-            { category: { $regex: search.trim(), $options: "i" } },
+            { title: { $regex: cleanSearch, $options: "i" } },
+            { description: { $regex: cleanSearch, $options: "i" } },
+            { category: { $regex: cleanSearch, $options: "i" } },
           ];
         }
 
@@ -212,15 +321,17 @@ async function run() {
         const { search, skill, sort, page, limit } = req.query;
         const query = { role: "freelancer" };
 
-        if (skill && skill !== "All") {
-          query.skills = { $regex: new RegExp(skill, "i") };
+        if (skill && typeof skill === "string" && skill !== "All") {
+          const cleanSkill = escapeRegex(skill.trim());
+          query.skills = { $regex: new RegExp(cleanSkill, "i") };
         }
 
-        if (search && search.trim()) {
+        if (search && typeof search === "string" && search.trim()) {
+          const cleanSearch = escapeRegex(search.trim());
           query.$or = [
-            { name: { $regex: search.trim(), $options: "i" } },
-            { bio: { $regex: search.trim(), $options: "i" } },
-            { skills: { $regex: search.trim(), $options: "i" } },
+            { name: { $regex: cleanSearch, $options: "i" } },
+            { bio: { $regex: cleanSearch, $options: "i" } },
+            { skills: { $regex: cleanSearch, $options: "i" } },
           ];
         }
 
@@ -284,7 +395,7 @@ async function run() {
     });
 
     // proposal data post api
-    app.post("/api/proposal", async (req, res) => {
+    app.post("/api/proposal", verifyInternalAuth, writeRateLimiter(60), async (req, res) => {
       try {
         const proposal = req.body;
 
@@ -292,6 +403,24 @@ async function run() {
           return res.status(400).send({
             success: false,
             message: "Task ID and Freelancer Email are required.",
+          });
+        }
+
+        if (proposal.proposedBudget !== undefined) {
+          const parsedProposed = Number(proposal.proposedBudget);
+          if (isNaN(parsedProposed) || parsedProposed <= 0) {
+            return res.status(400).send({
+              success: false,
+              message: "Proposed budget must be a valid positive number.",
+            });
+          }
+        }
+
+        const userEmail = req.headers["x-user-email"];
+        if (userEmail && proposal.freelancerEmail !== userEmail) {
+          return res.status(403).send({
+            success: false,
+            message: "Forbidden: Cannot submit proposal for another user.",
           });
         }
 
@@ -330,9 +459,15 @@ async function run() {
     });
 
     // proposal show on freelancer dashboard api
-    app.get("/api/proposal/freelancer/:email", async (req, res) => {
+    app.get("/api/proposal/freelancer/:email", verifyInternalAuth, async (req, res) => {
       try {
         const email = req.params.email;
+        const reqEmail = req.headers["x-user-email"];
+        const reqRole = req.headers["x-user-role"];
+        if (reqRole !== "admin" && reqEmail && reqEmail !== email) {
+          return res.status(403).send({ success: false, message: "Forbidden: Cannot access other freelancer proposals." });
+        }
+
         const query = {
           freelancerEmail: email,
         };
@@ -348,9 +483,15 @@ async function run() {
     });
 
     // proposal show on client dashboard api
-    app.get("/api/proposal/client/:email", async (req, res) => {
+    app.get("/api/proposal/client/:email", verifyInternalAuth, async (req, res) => {
       try {
         const email = req.params.email;
+        const reqEmail = req.headers["x-user-email"];
+        const reqRole = req.headers["x-user-role"];
+        if (reqRole !== "admin" && reqEmail && reqEmail !== email) {
+          return res.status(403).send({ success: false, message: "Forbidden: Cannot access other client proposals." });
+        }
+
         const query = {
           clientEmail: email,
         };
@@ -365,7 +506,7 @@ async function run() {
       }
     });
 
-    // proposal showing by task id
+    // proposal showing by task id (public for task applicants / task view)
     app.get("/api/proposals/task/:taskId", async (req, res) => {
       try {
         const taskId = req.params.taskId;
@@ -382,9 +523,15 @@ async function run() {
     });
 
     // active task
-    app.get("/api/active-task/:email", async (req, res) => {
+    app.get("/api/active-task/:email", verifyInternalAuth, async (req, res) => {
       try {
         const email = req.params.email;
+        const reqEmail = req.headers["x-user-email"];
+        const reqRole = req.headers["x-user-role"];
+        if (reqRole !== "admin" && reqEmail && reqEmail !== email) {
+          return res.status(403).send({ success: false, message: "Forbidden: Cannot access other active tasks." });
+        }
+
         const query = {
           freelancerEmail: email,
           status: "accepted",
@@ -401,7 +548,7 @@ async function run() {
     });
 
     // get admin dashboard statistics
-    app.get("/api/admin/dashboard-summary", async (req, res) => {
+    app.get("/api/admin/dashboard-summary", requireAdminAuth, async (req, res) => {
       try {
         const [totalUsers, totalTasks, activeTasks, revenueData] = await Promise.all([
           userCollection.countDocuments(),
@@ -425,7 +572,7 @@ async function run() {
     });
 
     // admin user list api
-    app.get("/api/admin/user", async (req, res) => {
+    app.get("/api/admin/user", requireAdminAuth, async (req, res) => {
       try {
         const users = await userCollection
           .find({}, { projection: { password: 0 } })
@@ -439,7 +586,7 @@ async function run() {
     });
 
     // payment confirmation
-    app.post("/api/confirm-session", async (req, res) => {
+    app.post("/api/confirm-session", verifyInternalAuth, writeRateLimiter(60), async (req, res) => {
       try {
         const {
           proposalId,
@@ -553,7 +700,7 @@ async function run() {
     });
 
     // delete task
-    app.delete("/api/client/task/:id", async (req, res) => {
+    app.delete("/api/client/task/:id", verifyInternalAuth, async (req, res) => {
       try {
         const id = req.params.id;
         if (!isValidObjectId(id)) {
@@ -562,6 +709,19 @@ async function run() {
         const query = {
           _id: new ObjectId(id),
         };
+
+        const existingTask = await taskCollection.findOne(query);
+        if (!existingTask) {
+          return res.status(404).send({ success: false, message: "Task not found" });
+        }
+
+        const requestingUserEmail = req.headers["x-user-email"] || req.body?.clientEmail;
+        const userRole = req.headers["x-user-role"] || req.body?.userRole;
+
+        if (userRole !== "admin" && requestingUserEmail && existingTask.clientEmail !== requestingUserEmail) {
+          return res.status(403).send({ success: false, message: "Forbidden: You do not have permission to delete this task." });
+        }
+
         const result = await taskCollection.deleteOne(query);
         res.send(result);
       } catch (error) {
@@ -571,7 +731,7 @@ async function run() {
     });
 
     // edit task
-    app.patch("/api/client/update/:id", async (req, res) => {
+    app.patch("/api/client/update/:id", verifyInternalAuth, async (req, res) => {
       try {
         const id = req.params.id;
         if (!isValidObjectId(id)) {
@@ -580,12 +740,32 @@ async function run() {
         const { title, budget, deadline, description, category } = req.body;
         const filter = { _id: new ObjectId(id) };
 
+        const existingTask = await taskCollection.findOne(filter);
+        if (!existingTask) {
+          return res.status(404).send({ success: false, message: "Task not found" });
+        }
+
+        const requestingUserEmail = req.headers["x-user-email"] || req.body?.clientEmail;
+        const userRole = req.headers["x-user-role"] || req.body?.userRole;
+
+        if (userRole !== "admin" && requestingUserEmail && existingTask.clientEmail !== requestingUserEmail) {
+          return res.status(403).send({ success: false, message: "Forbidden: You do not have permission to edit this task." });
+        }
+
+        let parsedBudget = existingTask.budget;
+        if (budget !== undefined) {
+          parsedBudget = Number(budget);
+          if (isNaN(parsedBudget) || parsedBudget <= 0) {
+            return res.status(400).send({ success: false, message: "Budget must be a valid positive number." });
+          }
+        }
+
         const updateDoc = {
           $set: {
-            title,
-            budget: Number(budget) || budget,
-            deadline,
-            description,
+            title: title || existingTask.title,
+            budget: parsedBudget,
+            deadline: deadline !== undefined ? deadline : existingTask.deadline,
+            description: description || existingTask.description,
             ...(category ? { category } : {}),
             updatedAt: new Date(),
           },
@@ -599,7 +779,7 @@ async function run() {
     });
 
     // reject Proposal
-    app.patch("/api/proposal/reject/:id", async (req, res) => {
+    app.patch("/api/proposal/reject/:id", verifyInternalAuth, async (req, res) => {
       try {
         const id = req.params.id;
         if (!isValidObjectId(id)) {
@@ -623,13 +803,20 @@ async function run() {
     });
 
     // complete task
-    app.patch("/api/proposal/complete/:id", async (req, res) => {
+    app.patch("/api/proposal/complete/:id", verifyInternalAuth, async (req, res) => {
       try {
         const { id } = req.params;
         if (!isValidObjectId(id)) {
           return res.status(400).send({ success: false, message: "Invalid Proposal ID format" });
         }
         const { deliverableUrl } = req.body;
+
+        if (!deliverableUrl || typeof deliverableUrl !== "string" || !deliverableUrl.trim().startsWith("http")) {
+          return res.status(400).send({
+            success: false,
+            message: "A valid deliverable URL starting with http:// or https:// is required.",
+          });
+        }
 
         const proposal = await proposalCollection.findOne({
           _id: new ObjectId(id),
@@ -642,13 +829,19 @@ async function run() {
           });
         }
 
+        const reqEmail = req.headers["x-user-email"] || req.body?.freelancerEmail;
+        const reqRole = req.headers["x-user-role"];
+        if (reqRole !== "admin" && reqEmail && proposal.freelancerEmail !== reqEmail) {
+          return res.status(403).send({ success: false, message: "Forbidden: You can only complete your own assigned proposals." });
+        }
+
         // Proposal update
         await proposalCollection.updateOne(
           { _id: new ObjectId(id) },
           {
             $set: {
               status: "completed",
-              deliverableUrl,
+              deliverableUrl: deliverableUrl.trim(),
               completedAt: new Date(),
               updatedAt: new Date(),
             },
@@ -681,8 +874,8 @@ async function run() {
       }
     });
 
-    // user block api
-    app.patch("/api/users/block/:id", async (req, res) => {
+    // user block api (admin only)
+    app.patch("/api/users/block/:id", requireAdminAuth, async (req, res) => {
       try {
         const { id } = req.params;
         if (!isValidObjectId(id)) {
@@ -731,8 +924,8 @@ async function run() {
       }
     });
 
-    // user role update api
-    app.patch("/api/users/role/:id", async (req, res) => {
+    // user role update api (admin only)
+    app.patch("/api/users/role/:id", requireAdminAuth, async (req, res) => {
       try {
         const { id } = req.params;
         if (!isValidObjectId(id)) {
@@ -778,8 +971,8 @@ async function run() {
       }
     });
 
-    // admin payment list api
-    app.get("/api/admin/payment", async (req, res) => {
+    // admin payment list api (admin only)
+    app.get("/api/admin/payment", requireAdminAuth, async (req, res) => {
       try {
         const payments = await paymentCollection
           .find({})
@@ -796,12 +989,19 @@ async function run() {
     });
 
     // client payment history api
-    app.get("/api/payment/client/:email", async (req, res) => {
+    app.get("/api/payment/client/:email", verifyInternalAuth, async (req, res) => {
       try {
         const email = req.params.email;
         if (!email) {
           return res.status(400).send({ success: false, message: "Email is required" });
         }
+
+        const reqEmail = req.headers["x-user-email"];
+        const reqRole = req.headers["x-user-role"];
+        if (reqRole !== "admin" && reqEmail && reqEmail !== email) {
+          return res.status(403).send({ success: false, message: "Forbidden: Cannot access other client payments." });
+        }
+
         const payments = await paymentCollection
           .find({ clientEmail: email })
           .sort({ paymentDate: -1, createdAt: -1 })
@@ -817,11 +1017,17 @@ async function run() {
     });
 
     // freelancer earnings & payment history api
-    app.get("/api/payment/freelancer/:email", async (req, res) => {
+    app.get("/api/payment/freelancer/:email", verifyInternalAuth, async (req, res) => {
       try {
         const email = req.params.email;
         if (!email) {
           return res.status(400).send({ success: false, message: "Email is required" });
+        }
+
+        const reqEmail = req.headers["x-user-email"];
+        const reqRole = req.headers["x-user-role"];
+        if (reqRole !== "admin" && reqEmail && reqEmail !== email) {
+          return res.status(403).send({ success: false, message: "Forbidden: Cannot access other freelancer earnings." });
         }
 
         // Find freelancer proposals to match payments by proposalId, taskId or direct freelancerEmail
