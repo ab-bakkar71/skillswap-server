@@ -18,6 +18,7 @@ const freelancerRoutes = require("./src/routes/freelancerRoutes");
 const proposalRoutes = require("./src/routes/proposalRoutes");
 const paymentRoutes = require("./src/routes/paymentRoutes");
 const adminRoutes = require("./src/routes/adminRoutes");
+const reviewRoutes = require("./src/routes/reviewRoutes");
 
 const app = express();
 const port = process.env.PORT || 8000;
@@ -44,6 +45,7 @@ app.use(freelancerRoutes);
 app.use(proposalRoutes);
 app.use(paymentRoutes);
 app.use(adminRoutes);
+app.use(reviewRoutes);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
