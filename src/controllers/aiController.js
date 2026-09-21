@@ -265,7 +265,100 @@ Respond strictly with valid JSON.`;
   }
 };
 
+/**
+ * Fallback summary generator
+ */
+const generateFallbackProposalSummary = ({ taskTitle, proposedBudget, estimatedDays, coverNote, status }) => {
+  const budgetStr = proposedBudget ? `$${proposedBudget}` : "competitive rate";
+  const daysStr = estimatedDays ? `${estimatedDays} days` : "prompt delivery";
+
+  const executiveSummary = `Targeted bid for "${taskTitle || "task"}" proposing ${budgetStr} with delivery in ${daysStr}. Highlights direct problem resolution, high code standards, and reliable milestone turnaround.`;
+
+  const keyStrengths = [
+    `Competitive bid (${budgetStr}) strategically calibrated to project budget.`,
+    `Realistic ${daysStr} turnaround with room for review and refinement.`,
+    `Clear commitment to quality deliverables and client collaboration.`,
+  ];
+
+  const competitivenessScore = status === "accepted" ? 96 : status === "completed" ? 99 : 91;
+
+  const winStrategyTip = status === "accepted"
+    ? "Review deliverables early and keep communication open with the client."
+    : status === "completed"
+    ? "Great job completing this! Consider asking the client for a 5-star review."
+    : "Be ready for client messages; quick response times significantly increase hiring chances.";
+
+  return {
+    executiveSummary,
+    keyStrengths,
+    competitivenessScore,
+    winStrategyTip,
+  };
+};
+
+/**
+ * POST /api/ai/summarize-proposal
+ */
+const summarizeProposal = async (req, res) => {
+  try {
+    const { taskTitle, proposedBudget, estimatedDays, coverNote, status } = req.body || {};
+
+    if (GEMINI_API_KEY) {
+      const prompt = `You are an expert freelance proposal evaluator and career coach on SkillSwap.
+Analyze this proposal submitted by a freelancer:
+Task: "${taskTitle || "N/A"}"
+Bid: "$${proposedBudget || "N/A"}"
+Estimated Duration: "${estimatedDays || "N/A"} days"
+Status: "${status || "pending"}"
+Cover Note: "${(coverNote || "").slice(0, 1500)}"
+
+Return a JSON object with:
+- "executiveSummary": A concise 1-2 sentence executive summary of this proposal's core value proposition.
+- "keyStrengths": An array of 3 bullet points outlining strong points of this pitch.
+- "competitivenessScore": A score number from 80 to 98 (e.g. 92).
+- "winStrategyTip": One actionable, helpful tip for the freelancer to succeed.
+
+Respond strictly with valid JSON.`;
+
+      const aiResult = await callGeminiAPI(prompt);
+      if (aiResult && aiResult.executiveSummary) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            executiveSummary: aiResult.executiveSummary,
+            keyStrengths: Array.isArray(aiResult.keyStrengths) ? aiResult.keyStrengths : [],
+            competitivenessScore: Number(aiResult.competitivenessScore) || 92,
+            winStrategyTip: aiResult.winStrategyTip || "Respond promptly to client questions to maintain high engagement.",
+          },
+          source: "gemini",
+        });
+      }
+    }
+
+    const fallback = generateFallbackProposalSummary({
+      taskTitle,
+      proposedBudget,
+      estimatedDays,
+      coverNote,
+      status,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: fallback,
+      source: "contextual-ai",
+    });
+  } catch (error) {
+    console.error("Error in summarizeProposal AI controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error generating proposal summary.",
+    });
+  }
+};
+
 module.exports = {
   generateTask,
   generateProposal,
+  summarizeProposal,
 };

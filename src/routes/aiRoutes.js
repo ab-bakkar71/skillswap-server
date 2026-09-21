@@ -19,4 +19,11 @@ router.post(
   aiController.generateProposal
 );
 
+router.post(
+  "/api/ai/summarize-proposal",
+  verifyInternalAuth,
+  writeRateLimiter(60),
+  aiController.summarizeProposal
+);
+
 module.exports = router;
