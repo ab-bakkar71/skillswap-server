@@ -150,7 +150,7 @@ const getActiveTasks = async (req, res) => {
 
     const query = {
       freelancerEmail: email,
-      status: "accepted",
+      status: { $in: ["accepted", "submitted", "completed"] },
     };
     const result = await proposalCollection
       .find(query)
@@ -190,7 +190,191 @@ const rejectProposal = async (req, res) => {
   }
 };
 
-// Complete Task / Submit Deliverable
+// Submit Work / Deliverable for Client Review
+const submitWork = async (req, res) => {
+  try {
+    const { proposalCollection, taskCollection } = getCollections();
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).send({ success: false, message: "Invalid Proposal ID format" });
+    }
+
+    const { deliverableUrl, submissionNotes } = req.body;
+
+    if (!deliverableUrl || typeof deliverableUrl !== "string" || !deliverableUrl.trim().startsWith("http")) {
+      return res.status(400).send({
+        success: false,
+        message: "A valid deliverable URL starting with http:// or https:// is required.",
+      });
+    }
+
+    const proposal = await proposalCollection.findOne({ _id: new ObjectId(id) });
+    if (!proposal) {
+      return res.status(404).send({ success: false, message: "Proposal not found" });
+    }
+
+    const reqEmail = req.headers["x-user-email"] || req.body?.freelancerEmail;
+    const reqRole = req.headers["x-user-role"];
+    if (reqRole !== "admin" && reqEmail && proposal.freelancerEmail !== reqEmail) {
+      return res.status(403).send({ success: false, message: "Forbidden: You can only submit work for your own assigned proposals." });
+    }
+
+    const now = new Date();
+    await proposalCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: "submitted",
+          deliverableUrl: deliverableUrl.trim(),
+          submissionNotes: submissionNotes ? String(submissionNotes).trim() : "",
+          submittedAt: now,
+          updatedAt: now,
+        },
+      }
+    );
+
+    if (isValidObjectId(proposal.taskId)) {
+      await taskCollection.updateOne(
+        { _id: new ObjectId(proposal.taskId) },
+        {
+          $set: {
+            status: "submitted",
+            updatedAt: now,
+          },
+        }
+      );
+    }
+
+    res.send({
+      success: true,
+      message: "Work submitted successfully for client review.",
+    });
+  } catch (error) {
+    console.error("Error submitting work:", error);
+    res.status(500).send({ success: false, message: error.message || "Internal Server Error" });
+  }
+};
+
+// Client Approves Deliverable and Completes Task
+const approveWork = async (req, res) => {
+  try {
+    const { proposalCollection, taskCollection } = getCollections();
+    const { id } = req.params;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).send({ success: false, message: "Invalid Proposal ID format" });
+    }
+
+    const proposal = await proposalCollection.findOne({ _id: new ObjectId(id) });
+    if (!proposal) {
+      return res.status(404).send({ success: false, message: "Proposal not found" });
+    }
+
+    const reqEmail = req.headers["x-user-email"] || req.body?.clientEmail;
+    const reqRole = req.headers["x-user-role"];
+    if (reqRole !== "admin" && reqEmail && proposal.clientEmail !== reqEmail) {
+      return res.status(403).send({ success: false, message: "Forbidden: Only the client can approve this submission." });
+    }
+
+    const now = new Date();
+    await proposalCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: "completed",
+          completedAt: now,
+          updatedAt: now,
+        },
+      }
+    );
+
+    if (isValidObjectId(proposal.taskId)) {
+      await taskCollection.updateOne(
+        { _id: new ObjectId(proposal.taskId) },
+        {
+          $set: {
+            status: "completed",
+            updatedAt: now,
+          },
+        }
+      );
+    }
+
+    res.send({
+      success: true,
+      message: "Deliverable approved! Task marked as completed.",
+    });
+  } catch (error) {
+    console.error("Error approving deliverable:", error);
+    res.status(500).send({ success: false, message: error.message || "Internal Server Error" });
+  }
+};
+
+// Client Requests Revision with Feedback
+const requestRevision = async (req, res) => {
+  try {
+    const { proposalCollection, taskCollection } = getCollections();
+    const { id } = req.params;
+    const { revisionNotes } = req.body;
+
+    if (!isValidObjectId(id)) {
+      return res.status(400).send({ success: false, message: "Invalid Proposal ID format" });
+    }
+
+    if (!revisionNotes || !String(revisionNotes).trim()) {
+      return res.status(400).send({ success: false, message: "Please provide revision notes explaining what needs improvement." });
+    }
+
+    const proposal = await proposalCollection.findOne({ _id: new ObjectId(id) });
+    if (!proposal) {
+      return res.status(404).send({ success: false, message: "Proposal not found" });
+    }
+
+    const reqEmail = req.headers["x-user-email"] || req.body?.clientEmail;
+    const reqRole = req.headers["x-user-role"];
+    if (reqRole !== "admin" && reqEmail && proposal.clientEmail !== reqEmail) {
+      return res.status(403).send({ success: false, message: "Forbidden: Only the client can request revisions." });
+    }
+
+    const now = new Date();
+    await proposalCollection.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: "accepted",
+          revisionNotes: String(revisionNotes).trim(),
+          updatedAt: now,
+        },
+        $inc: {
+          revisionCount: 1,
+        },
+      }
+    );
+
+    if (isValidObjectId(proposal.taskId)) {
+      await taskCollection.updateOne(
+        { _id: new ObjectId(proposal.taskId) },
+        {
+          $set: {
+            status: "in-progress",
+            updatedAt: now,
+          },
+        }
+      );
+    }
+
+    res.send({
+      success: true,
+      message: "Revision requested successfully.",
+    });
+  } catch (error) {
+    console.error("Error requesting revision:", error);
+    res.status(500).send({ success: false, message: error.message || "Internal Server Error" });
+  }
+};
+
+// Legacy Direct Complete Task
 const completeProposal = async (req, res) => {
   try {
     const { proposalCollection, taskCollection } = getCollections();
@@ -272,5 +456,8 @@ module.exports = {
   getProposalsByTaskId,
   getActiveTasks,
   rejectProposal,
+  submitWork,
+  approveWork,
+  requestRevision,
   completeProposal,
 };
