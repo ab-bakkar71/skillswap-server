@@ -33,6 +33,7 @@ async function run() {
       const task = req.body;
       const newTask = {
         ...task,
+        createdAt: new Date(),
         createAt: new Date(),
       };
       const result = await taskCollection.insertOne(newTask);
@@ -135,6 +136,7 @@ async function run() {
         const finalProposal = {
           ...proposal,
           createdAt: new Date(),
+          createAt: new Date(),
           status: "pending",
         };
 
@@ -160,7 +162,7 @@ async function run() {
       };
       const result = await proposalCollection
         .find(query)
-        .sort({ createAt: -1 })
+        .sort({ createdAt: -1, createAt: -1 })
         .toArray();
       res.send(result);
     });
@@ -173,7 +175,7 @@ async function run() {
       };
       const result = await proposalCollection
         .find(query)
-        .sort({ createAt: -1 })
+        .sort({ createdAt: -1, createAt: -1 })
         .toArray();
       res.send(result);
     });
@@ -198,7 +200,7 @@ async function run() {
       };
       const result = await proposalCollection
         .find(query)
-        .sort({ createAt: -1 })
+        .sort({ createdAt: -1, createAt: -1 })
         .toArray();
       res.send(result);
     });
@@ -266,7 +268,7 @@ async function run() {
           paymentDate: new Date(),
         };
 
-        isPaymentExist = await paymentCollection.findOne({ transactionId });
+        const isPaymentExist = await paymentCollection.findOne({ transactionId });
         if (isPaymentExist) {
           return res.status(200).send({ message: "Already Paid" });
         }
@@ -466,6 +468,49 @@ async function run() {
       } catch (error) {
         console.error(error);
 
+        res.status(500).send({
+          success: false,
+          message: error.message,
+        });
+      }
+    });
+
+    // user role update api
+    app.patch("/api/users/role/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { role } = req.body;
+
+        if (!["client", "freelancer", "admin"].includes(role)) {
+          return res.status(400).send({
+            success: false,
+            message: "Invalid role. Must be 'client', 'freelancer', or 'admin'.",
+          });
+        }
+
+        const result = await userCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              role,
+            },
+          },
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).send({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        res.send({
+          success: true,
+          message: `User role updated to '${role}' successfully.`,
+          result,
+        });
+      } catch (error) {
+        console.error(error);
         res.status(500).send({
           success: false,
           message: error.message,
