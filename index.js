@@ -36,6 +36,34 @@ const isValidObjectId = (id) => {
   return Boolean(id && ObjectId.isValid(id) && String(new ObjectId(id)) === String(id));
 };
 
+async function initIndexes(database) {
+  try {
+    const taskCollection = database.collection("task");
+    const userCollection = database.collection("user");
+    const proposalCollection = database.collection("proposal");
+    const paymentCollection = database.collection("payment");
+
+    await Promise.allSettled([
+      taskCollection.createIndex({ clientEmail: 1 }),
+      taskCollection.createIndex({ status: 1, createdAt: -1 }),
+      taskCollection.createIndex({ category: 1 }),
+      userCollection.createIndex({ email: 1 }, { unique: true, sparse: true }),
+      userCollection.createIndex({ role: 1 }),
+      proposalCollection.createIndex({ freelancerEmail: 1 }),
+      proposalCollection.createIndex({ clientEmail: 1 }),
+      proposalCollection.createIndex({ taskId: 1 }),
+      proposalCollection.createIndex({ status: 1 }),
+      paymentCollection.createIndex({ transactionId: 1 }, { unique: true, sparse: true }),
+      paymentCollection.createIndex({ clientEmail: 1 }),
+      paymentCollection.createIndex({ freelancerEmail: 1 }),
+      paymentCollection.createIndex({ proposalId: 1 }),
+      paymentCollection.createIndex({ taskId: 1 }),
+    ]);
+  } catch (err) {
+    console.warn("Index initialization notice:", err.message);
+  }
+}
+
 async function run() {
   try {
     const database = client.db("skill_swap");
@@ -43,6 +71,9 @@ async function run() {
     const userCollection = database.collection("user");
     const proposalCollection = database.collection("proposal");
     const paymentCollection = database.collection("payment");
+
+    // Initialize database indexes for performance optimization
+    await initIndexes(database);
 
     // post task api
     app.post("/api/task", async (req, res) => {
@@ -57,6 +88,8 @@ async function run() {
 
         const newTask = {
           ...task,
+          budget: Number(task.budget) || task.budget,
+          status: task.status || "open",
           createdAt: new Date(),
           createAt: new Date(),
         };
@@ -103,6 +136,7 @@ async function run() {
             skills: updateData.skills,
             bio: updateData.bio,
             hourlyRate: updateData.hourlyRate,
+            updatedAt: new Date(),
           },
         };
         const result = await userCollection.updateOne(query, updateDoc);
@@ -113,13 +147,38 @@ async function run() {
       }
     });
 
-    // all task api
+    // all task api with query support (search, category, sort, pagination)
     app.get("/api/tasks", async (req, res) => {
       try {
+        const { search, category, sort, page, limit } = req.query;
         const query = { status: "open" };
-        const cursor = await taskCollection
-          .find(query)
-          .sort({ createdAt: -1, createAt: -1 });
+
+        if (category && category !== "all") {
+          query.category = { $regex: new RegExp(`^${category}$`, "i") };
+        }
+
+        if (search && search.trim()) {
+          query.$or = [
+            { title: { $regex: search.trim(), $options: "i" } },
+            { description: { $regex: search.trim(), $options: "i" } },
+            { category: { $regex: search.trim(), $options: "i" } },
+          ];
+        }
+
+        let sortOption = { createdAt: -1, createAt: -1 };
+        if (sort === "budget-desc") {
+          sortOption = { budget: -1 };
+        } else if (sort === "budget-asc") {
+          sortOption = { budget: 1 };
+        }
+
+        let cursor = taskCollection.find(query).sort(sortOption);
+
+        if (page && limit) {
+          const skip = (Number(page) - 1) * Number(limit);
+          cursor = cursor.skip(skip).limit(Number(limit));
+        }
+
         const result = await cursor.toArray();
         res.send(result);
       } catch (error) {
@@ -147,13 +206,39 @@ async function run() {
       }
     });
 
-    // get freelancer
+    // get freelancer with optional search, skill, sort & pagination
     app.get("/api/freelancer", async (req, res) => {
       try {
+        const { search, skill, sort, page, limit } = req.query;
         const query = { role: "freelancer" };
-        const result = await userCollection
-          .find(query, { projection: { password: 0 } })
-          .toArray();
+
+        if (skill && skill !== "All") {
+          query.skills = { $regex: new RegExp(skill, "i") };
+        }
+
+        if (search && search.trim()) {
+          query.$or = [
+            { name: { $regex: search.trim(), $options: "i" } },
+            { bio: { $regex: search.trim(), $options: "i" } },
+            { skills: { $regex: search.trim(), $options: "i" } },
+          ];
+        }
+
+        let sortOption = { createdAt: -1, createAt: -1 };
+        if (sort === "rate-desc") {
+          sortOption = { hourlyRate: -1 };
+        } else if (sort === "rate-asc") {
+          sortOption = { hourlyRate: 1 };
+        }
+
+        let cursor = userCollection.find(query, { projection: { password: 0 } }).sort(sortOption);
+
+        if (page && limit) {
+          const skip = (Number(page) - 1) * Number(limit);
+          cursor = cursor.skip(skip).limit(Number(limit));
+        }
+
+        const result = await cursor.toArray();
         res.send(result);
       } catch (error) {
         console.error("Error fetching freelancers:", error);
@@ -318,15 +403,13 @@ async function run() {
     // get admin dashboard statistics
     app.get("/api/admin/dashboard-summary", async (req, res) => {
       try {
-        const totalUsers = await userCollection.countDocuments();
-        const totalTasks = await taskCollection.countDocuments();
-        const activeTasks = await taskCollection.countDocuments({
-          status: "in-progress",
-        });
+        const [totalUsers, totalTasks, activeTasks, revenueData] = await Promise.all([
+          userCollection.countDocuments(),
+          taskCollection.countDocuments(),
+          taskCollection.countDocuments({ status: "in-progress" }),
+          paymentCollection.aggregate([{ $group: { _id: null, total: { $sum: "$amount" } } }]).toArray()
+        ]);
 
-        const revenueData = await paymentCollection
-          .aggregate([{ $group: { _id: null, total: { $sum: "$amount" } } }])
-          .toArray();
         const totalRevenue = revenueData[0]?.total || 0;
 
         res.send({
@@ -778,10 +861,47 @@ async function run() {
 }
 run().catch(console.dir);
 
+// Health check endpoint
+app.get("/api/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    service: "SkillSwap Server"
+  });
+});
+
 app.get("/", (req, res) => {
   res.send("SkillSwap API Server is running smoothly.");
 });
 
-app.listen(port, () => {
+// Express global error handler
+app.use((err, req, res, _next) => {
+  console.error("Unhandled error:", err);
+  res.status(500).json({
+    success: false,
+    message: err.message || "Internal Server Error",
+  });
+});
+
+const server = app.listen(port, () => {
   console.log(`SkillSwap server listening on port ${port}`);
 });
+
+// Graceful shutdown
+const gracefulShutdown = async () => {
+  console.log("Shutting down gracefully...");
+  server.close(async () => {
+    try {
+      await client.close();
+      console.log("MongoDB connection closed.");
+      process.exit(0);
+    } catch (e) {
+      console.error("Error closing MongoDB connection:", e);
+      process.exit(1);
+    }
+  });
+};
+
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
