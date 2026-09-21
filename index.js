@@ -19,6 +19,7 @@ const proposalRoutes = require("./src/routes/proposalRoutes");
 const paymentRoutes = require("./src/routes/paymentRoutes");
 const adminRoutes = require("./src/routes/adminRoutes");
 const reviewRoutes = require("./src/routes/reviewRoutes");
+const aiRoutes = require("./src/routes/aiRoutes");
 
 const app = express();
 const port = process.env.PORT || 8000;
@@ -46,6 +47,7 @@ app.use(proposalRoutes);
 app.use(paymentRoutes);
 app.use(adminRoutes);
 app.use(reviewRoutes);
+app.use(aiRoutes);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
