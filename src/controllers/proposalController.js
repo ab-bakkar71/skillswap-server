@@ -92,7 +92,7 @@ const getFreelancerProposals = async (req, res) => {
       return res.status(403).send({ success: false, message: "Forbidden: Cannot access other freelancer proposals." });
     }
 
-    const query = { freelancerEmail: email };
+    const query = { freelancerEmail: { $regex: new RegExp(`^${email.trim()}$`, "i") } };
     const result = await proposalCollection
       .find(query)
       .sort({ createdAt: -1, createAt: -1 })
@@ -117,7 +117,7 @@ const getClientProposals = async (req, res) => {
       return res.status(403).send({ success: false, message: "Forbidden: Cannot access other client proposals." });
     }
 
-    const query = { clientEmail: email };
+    const query = { clientEmail: { $regex: new RegExp(`^${email.trim()}$`, "i") } };
     const result = await proposalCollection
       .find(query)
       .sort({ createdAt: -1, createAt: -1 })
@@ -162,7 +162,7 @@ const getActiveTasks = async (req, res) => {
     }
 
     const query = {
-      freelancerEmail: email,
+      freelancerEmail: { $regex: new RegExp(`^${email.trim()}$`, "i") },
       status: { $in: ["accepted", "submitted", "completed"] },
     };
     const result = await proposalCollection
