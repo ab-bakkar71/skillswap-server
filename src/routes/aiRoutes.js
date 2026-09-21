@@ -28,14 +28,12 @@ router.post(
 
 router.post(
   "/api/ai/summarize-task",
-  verifyInternalAuth,
   writeRateLimiter(60),
   aiController.summarizeTask
 );
 
 router.post(
   "/api/ai/chat",
-  verifyInternalAuth,
   writeRateLimiter(60),
   aiController.chatWithAI
 );
